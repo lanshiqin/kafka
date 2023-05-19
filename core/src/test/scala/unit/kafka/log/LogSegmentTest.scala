@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +16,9 @@
  */
 package kafka.log
 
-import java.io.File
+import kafka.common.LogSegmentOffsetOverflowException
 
+import java.io.File
 import kafka.utils.TestUtils
 import kafka.utils.TestUtils.checkEquals
 import org.apache.kafka.common.TopicPartition
@@ -25,6 +26,7 @@ import org.apache.kafka.common.record._
 import org.apache.kafka.common.utils.{MockTime, Time, Utils}
 import org.junit.Assert._
 import org.junit.{After, Before, Test}
+import org.scalatest.Matchers.assertThrows
 
 import scala.collection.JavaConverters._
 import scala.collection._
@@ -67,6 +69,34 @@ class LogSegmentTest {
     Utils.delete(logDir)
   }
 
+  @Test
+  def testAppendForLogSegmentOffsetOverflowException(): Unit = {
+    val dataSet: Map[Long, Long] = Map(
+      (0, -2147483648),
+      (0, 2147483648L),
+      (1, 0),
+      (100, 10),
+      (2147483648L, 0),
+      (-2147483648L, 0),
+      (2147483648L, 4294967296L)
+    )
+    for (data <- dataSet) {
+      val baseOffset = data._1
+      val largestOffset = data._2
+      val seg = createSegment(baseOffset)
+      val currentTime = Time.SYSTEM.milliseconds()
+      val shallowOffsetOfMaxTimestamp = 1
+      val memoryRecords = records(0, "hello")
+      try {
+        seg.append(largestOffset, currentTime, shallowOffsetOfMaxTimestamp, memoryRecords)
+      }catch {
+        case e: LogSegmentOffsetOverflowException =>{
+
+        }
+      }
+    }
+  }
+
   /**
    * A read on an empty log segment should return null
    */
@@ -100,9 +130,11 @@ class LogSegmentTest {
     val seg = createSegment(baseOffset)
     val ms = records(baseOffset, "hello", "there", "beautiful")
     seg.append(52, RecordBatch.NO_TIMESTAMP, -1L, ms)
+
     def validate(offset: Long) =
       assertEquals(ms.records.asScala.filter(_.offset == offset).toList,
-                   seg.read(startOffset = offset, maxSize = 1024, maxOffset = Some(offset+1)).records.records.asScala.toList)
+        seg.read(startOffset = offset, maxSize = 1024, maxOffset = Some(offset + 1)).records.records.asScala.toList)
+
     validate(50)
     validate(51)
     validate(52)
@@ -303,12 +335,12 @@ class LogSegmentTest {
   @Test
   def testRecoveryFixesCorruptIndex() {
     val seg = createSegment(0)
-    for(i <- 0 until 100)
+    for (i <- 0 until 100)
       seg.append(i, RecordBatch.NO_TIMESTAMP, -1L, records(i, i.toString))
     val indexFile = seg.offsetIndex.file
     TestUtils.writeNonsenseToFile(indexFile, 5, indexFile.length.toInt)
     seg.recover(new ProducerStateManager(topicPartition, logDir))
-    for(i <- 0 until 100)
+    for (i <- 0 until 100)
       assertEquals(i, seg.read(i, Some(i + 1), 1024).records.records.iterator.next().offset)
   }
 
@@ -392,12 +424,12 @@ class LogSegmentTest {
   @Test
   def testRecoveryFixesCorruptTimeIndex() {
     val seg = createSegment(0)
-    for(i <- 0 until 100)
+    for (i <- 0 until 100)
       seg.append(i, i * 10, i, records(i, i.toString))
     val timeIndexFile = seg.timeIndex.file
     TestUtils.writeNonsenseToFile(timeIndexFile, 5, timeIndexFile.length.toInt)
     seg.recover(new ProducerStateManager(topicPartition, logDir))
-    for(i <- 0 until 100) {
+    for (i <- 0 until 100) {
       assertEquals(i, seg.findOffsetByTimestamp(i * 10).get.offset)
       if (i < 99)
         assertEquals(i + 1, seg.findOffsetByTimestamp(i * 10 + 1).get.offset)
@@ -443,7 +475,7 @@ class LogSegmentTest {
   /* create a segment with   pre allocate, put message to it and verify */
   @Test
   def testCreateWithInitFileSizeAppendMessage() {
-    val seg = createSegment(40, false, 512*1024*1024, true)
+    val seg = createSegment(40, false, 512 * 1024 * 1024, true)
     val ms = records(50, "hello", "there")
     seg.append(51, RecordBatch.NO_TIMESTAMP, -1L, ms)
     val ms2 = records(60, "alpha", "beta")
@@ -474,7 +506,7 @@ class LogSegmentTest {
     val oldSize = seg.log.sizeInBytes()
     val oldPosition = seg.log.channel.position
     val oldFileSize = seg.log.file.length
-    assertEquals(512*1024*1024, oldFileSize)
+    assertEquals(512 * 1024 * 1024, oldFileSize)
     seg.close()
     //After close, file should be trimmed
     assertEquals(oldSize, seg.log.file.length)
