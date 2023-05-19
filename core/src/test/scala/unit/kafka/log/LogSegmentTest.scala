@@ -91,7 +91,8 @@ class LogSegmentTest {
         seg.append(largestOffset, currentTime, shallowOffsetOfMaxTimestamp, memoryRecords)
       }catch {
         case e: LogSegmentOffsetOverflowException =>{
-
+          println("expected => "+e.getMessage)
+          e.printStackTrace()
         }
       }
     }
