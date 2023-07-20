@@ -28,6 +28,7 @@ import org.apache.kafka.common.metadata.RegisterBrokerRecord;
 import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.controller.QuorumFeatures;
+import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
 import org.apache.kafka.image.AclsImage;
 import org.apache.kafka.image.ClientQuotasImage;
 import org.apache.kafka.image.ClusterImage;
@@ -42,6 +43,7 @@ import org.apache.kafka.image.loader.LogDeltaManifest;
 import org.apache.kafka.image.loader.SnapshotManifest;
 import org.apache.kafka.metadata.BrokerRegistrationFencingChange;
 import org.apache.kafka.metadata.BrokerRegistrationInControlledShutdownChange;
+import org.apache.kafka.metadata.KafkaConfigSchema;
 import org.apache.kafka.metadata.RecordTestUtils;
 import org.apache.kafka.raft.LeaderAndEpoch;
 import org.apache.kafka.raft.OffsetAndEpoch;
@@ -62,20 +64,21 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.apache.kafka.image.TopicsImageTest.DELTA1_RECORDS;
 import static org.apache.kafka.image.TopicsImageTest.IMAGE1;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public class KRaftMigrationDriverTest {
     List<Node> controllerNodes = Arrays.asList(
@@ -88,6 +91,22 @@ public class KRaftMigrationDriverTest {
         apiVersions,
         QuorumFeatures.defaultFeatureMap(),
         controllerNodes);
+
+    static class MockControllerMetrics extends QuorumControllerMetrics {
+        final AtomicBoolean closed = new AtomicBoolean(false);
+
+        MockControllerMetrics() {
+            super(Optional.empty(), Time.SYSTEM, false);
+        }
+
+        @Override
+        public void close() {
+            super.close();
+            closed.set(true);
+        }
+    }
+    MockControllerMetrics metrics = new MockControllerMetrics();
+
     Time mockTime = new MockTime(1) {
         public long nanoseconds() {
             // We poll the event for each 1 sec, make it happen for each 10 ms to speed up the test
@@ -215,9 +234,10 @@ public class KRaftMigrationDriverTest {
             metadataPublisher -> { },
             new MockFaultHandler("test"),
             quorumFeatures,
+            KafkaConfigSchema.EMPTY,
+            metrics,
             mockTime
         )) {
-
             MetadataImage image = MetadataImage.EMPTY;
             MetadataDelta delta = new MetadataDelta(image);
 
@@ -274,7 +294,8 @@ public class KRaftMigrationDriverTest {
     public void testMigrationWithClientException(boolean authException) throws Exception {
         CountingMetadataPropagator metadataPropagator = new CountingMetadataPropagator();
         CountDownLatch claimLeaderAttempts = new CountDownLatch(3);
-        CapturingMigrationClient migrationClient = new CapturingMigrationClient(new HashSet<>(Arrays.asList(1, 2, 3)), new CapturingTopicMigrationClient(), null, null) {
+        CapturingMigrationClient migrationClient = new CapturingMigrationClient(new HashSet<>(Arrays.asList(1, 2, 3)),
+                new CapturingTopicMigrationClient(), new CapturingConfigMigrationClient(), new CapturingAclMigrationClient()) {
             @Override
             public ZkMigrationLeadershipState claimControllerLeadership(ZkMigrationLeadershipState state) {
                 if (claimLeaderAttempts.getCount() == 0) {
@@ -299,6 +320,8 @@ public class KRaftMigrationDriverTest {
             metadataPublisher -> { },
             faultHandler,
             quorumFeatures,
+            KafkaConfigSchema.EMPTY,
+            metrics,
             mockTime
         )) {
             MetadataImage image = MetadataImage.EMPTY;
@@ -344,9 +367,10 @@ public class KRaftMigrationDriverTest {
             },
             new MockFaultHandler("test"),
             quorumFeatures,
+            KafkaConfigSchema.EMPTY,
+            metrics,
             mockTime
         )) {
-
             MetadataImage image = MetadataImage.EMPTY;
             MetadataDelta delta = new MetadataDelta(image);
 
@@ -367,7 +391,7 @@ public class KRaftMigrationDriverTest {
 
             // Current apiVersions of node 6 has no zkMigrationReady set, should still stay at WAIT_FOR_CONTROLLER_QUORUM state
             apiVersions.update("6", NodeApiVersions.create());
-            driver.migrationState().get(1, TimeUnit.MINUTES).equals(MigrationDriverState.WAIT_FOR_CONTROLLER_QUORUM);
+            assertEquals(MigrationDriverState.WAIT_FOR_CONTROLLER_QUORUM, driver.migrationState().get(1, TimeUnit.MINUTES));
 
             // all controller nodes are zkMigrationReady, should be able to move to next state
             apiVersions.update("6", new NodeApiVersions(Collections.emptyList(), Collections.emptyList(), true));
@@ -379,17 +403,20 @@ public class KRaftMigrationDriverTest {
     @Test
     public void testSkipWaitForBrokersInDualWrite() throws Exception {
         CountingMetadataPropagator metadataPropagator = new CountingMetadataPropagator();
-        CapturingMigrationClient migrationClient = new CapturingMigrationClient(Collections.emptySet(), null, null, null);
+        CapturingMigrationClient migrationClient = new CapturingMigrationClient(Collections.emptySet(),
+            new CapturingTopicMigrationClient(), new CapturingConfigMigrationClient(), new CapturingAclMigrationClient());
         MockFaultHandler faultHandler = new MockFaultHandler("testMigrationClientExpiration");
         try (KRaftMigrationDriver driver = new KRaftMigrationDriver(
-                3000,
-                new NoOpRecordConsumer(),
-                migrationClient,
-                metadataPropagator,
-                metadataPublisher -> { },
-                faultHandler,
-                quorumFeatures,
-                mockTime
+            3000,
+            new NoOpRecordConsumer(),
+            migrationClient,
+            metadataPropagator,
+            metadataPublisher -> { },
+            faultHandler,
+            quorumFeatures,
+            KafkaConfigSchema.EMPTY,
+            metrics,
+            mockTime
         )) {
             MetadataImage image = MetadataImage.EMPTY;
             MetadataDelta delta = new MetadataDelta(image);
@@ -420,6 +447,7 @@ public class KRaftMigrationDriverTest {
     interface TopicDualWriteVerifier {
         void verify(
             KRaftMigrationDriver driver,
+            CapturingMigrationClient migrationClient,
             CapturingTopicMigrationClient topicClient,
             CapturingConfigMigrationClient configClient
         ) throws Exception;
@@ -459,15 +487,17 @@ public class KRaftMigrationDriverTest {
             metadataPublisher -> { },
             new MockFaultHandler("test"),
             quorumFeatures,
+            KafkaConfigSchema.EMPTY,
+            metrics,
             mockTime
         )) {
-            verifier.verify(driver, topicClient, configClient);
+            verifier.verify(driver, migrationClient, topicClient, configClient);
         }
     }
 
     @Test
     public void testTopicDualWriteSnapshot() throws Exception {
-        setupTopicDualWrite((driver, topicClient, configClient) -> {
+        setupTopicDualWrite((driver, migrationClient, topicClient, configClient) -> {
             MetadataImage image = new MetadataImage(
                 MetadataProvenance.EMPTY,
                 FeaturesImage.EMPTY,
@@ -519,7 +549,7 @@ public class KRaftMigrationDriverTest {
 
     @Test
     public void testTopicDualWriteDelta() throws Exception {
-        setupTopicDualWrite((driver, topicClient, configClient) -> {
+        setupTopicDualWrite((driver, migrationClient, topicClient, configClient) -> {
             MetadataImage image = new MetadataImage(
                 MetadataProvenance.EMPTY,
                 FeaturesImage.EMPTY,
@@ -560,6 +590,64 @@ public class KRaftMigrationDriverTest {
             driver.onMetadataUpdate(delta, image, new LogDeltaManifest(provenance, newLeader, 1, 100, 42));
             driver.migrationState().get(1, TimeUnit.MINUTES);
 
+            assertEquals(1, topicClient.deletedTopics.size());
+            assertEquals("foo", topicClient.deletedTopics.get(0));
+            assertEquals(1, topicClient.createdTopics.size());
+            assertEquals("baz", topicClient.createdTopics.get(0));
+            assertTrue(topicClient.updatedTopicPartitions.get("bar").contains(0));
+            assertEquals(new ConfigResource(ConfigResource.Type.TOPIC, "foo"), configClient.deletedResources.get(0));
+        });
+    }
+
+    @Test
+    public void testControllerFailover() throws Exception {
+        setupTopicDualWrite((driver, migrationClient, topicClient, configClient) -> {
+            MetadataImage image = new MetadataImage(
+                MetadataProvenance.EMPTY,
+                FeaturesImage.EMPTY,
+                ClusterImage.EMPTY,
+                IMAGE1,
+                ConfigurationsImage.EMPTY,
+                ClientQuotasImage.EMPTY,
+                ProducerIdsImage.EMPTY,
+                AclsImage.EMPTY,
+                ScramImage.EMPTY);
+            MetadataDelta delta = new MetadataDelta(image);
+
+            driver.start();
+            delta.replay(ZkMigrationState.PRE_MIGRATION.toRecord().message());
+            delta.replay(zkBrokerRecord(0));
+            delta.replay(zkBrokerRecord(1));
+            delta.replay(zkBrokerRecord(2));
+            delta.replay(zkBrokerRecord(3));
+            delta.replay(zkBrokerRecord(4));
+            delta.replay(zkBrokerRecord(5));
+            MetadataProvenance provenance = new MetadataProvenance(100, 1, 1);
+            image = delta.apply(provenance);
+
+            // Publish a delta making a different node the leader
+            LeaderAndEpoch newLeader = new LeaderAndEpoch(OptionalInt.of(3001), 1);
+            driver.onControllerChange(newLeader);
+            driver.onMetadataUpdate(delta, image, new LogDeltaManifest(provenance, newLeader, 1, 100, 42));
+
+            // Fake a complete migration
+            migrationClient.setMigrationRecoveryState(
+                ZkMigrationLeadershipState.EMPTY.withKRaftMetadataOffsetAndEpoch(100, 1));
+
+            // Modify topics in a KRaft -- delete foo, modify bar, add baz
+            provenance = new MetadataProvenance(200, 1, 1);
+            delta = new MetadataDelta(image);
+            RecordTestUtils.replayAll(delta, DELTA1_RECORDS);
+            image = delta.apply(provenance);
+
+            // Standby driver does not do anything with this delta besides remember the image
+            driver.onMetadataUpdate(delta, image, new LogDeltaManifest(provenance, newLeader, 1, 100, 42));
+
+            // Standby becomes leader
+            newLeader = new LeaderAndEpoch(OptionalInt.of(3000), 1);
+            driver.onControllerChange(newLeader);
+            TestUtils.waitForCondition(() -> driver.migrationState().get(1, TimeUnit.MINUTES).equals(MigrationDriverState.DUAL_WRITE),
+                "");
             assertEquals(1, topicClient.deletedTopics.size());
             assertEquals("foo", topicClient.deletedTopics.get(0));
             assertEquals(1, topicClient.createdTopics.size());

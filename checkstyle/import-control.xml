@@ -223,16 +223,21 @@
     <subpackage name="group">
       <allow pkg="org.apache.kafka.clients.consumer" />
       <allow pkg="org.apache.kafka.common.annotation" />
+      <allow pkg="org.apache.kafka.common.config" />
+      <allow pkg="org.apache.kafka.common.internals" />
       <allow pkg="org.apache.kafka.common.message" />
       <allow pkg="org.apache.kafka.common.metadata" />
       <allow pkg="org.apache.kafka.common.network" />
       <allow pkg="org.apache.kafka.common.protocol" />
       <allow pkg="org.apache.kafka.common.requests" />
       <allow pkg="org.apache.kafka.coordinator.group" />
+      <allow pkg="org.apache.kafka.deferred" />
       <allow pkg="org.apache.kafka.image"/>
       <allow pkg="org.apache.kafka.server.common"/>
+      <allow pkg="org.apache.kafka.server.record"/>
       <allow pkg="org.apache.kafka.server.util"/>
-      <allow pkg="org.apache.kafka.timeline"/>
+      <allow pkg="org.apache.kafka.test" />
+      <allow pkg="org.apache.kafka.timeline" />
     </subpackage>
   </subpackage>
 
@@ -261,9 +266,11 @@
   </subpackage>
 
   <subpackage name="storage.internals">
+    <allow pkg="com.yammer.metrics.core" />
     <allow pkg="org.apache.kafka.server"/>
     <allow pkg="org.apache.kafka.storage.internals"/>
     <allow pkg="org.apache.kafka.common" />
+    <allow pkg="com.github.benmanes.caffeine.cache" />
   </subpackage>
 
   <subpackage name="shell">
@@ -336,6 +343,7 @@
     <allow pkg="org.apache.kafka.clients"/>
     <allow pkg="org.apache.kafka.clients.producer" exact-match="true"/>
     <allow pkg="org.apache.kafka.clients.consumer" exact-match="true"/>
+    <allow pkg="org.apache.kafka.server.util"/>
 
     <allow pkg="org.apache.kafka.streams"/>
 

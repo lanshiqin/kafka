@@ -253,6 +253,19 @@ public class PluginsTest {
     }
 
     @Test
+    public void shouldHideIfNoDefaultConstructor() {
+        assertTrue(plugins.sinkConnectors().stream().noneMatch(pluginDesc -> pluginDesc.className().equals(
+                TestPlugin.BAD_PACKAGING_NO_DEFAULT_CONSTRUCTOR_CONNECTOR.className()
+        )));
+        assertTrue(plugins.converters().stream().noneMatch(pluginDesc -> pluginDesc.className().equals(
+                TestPlugin.BAD_PACKAGING_NO_DEFAULT_CONSTRUCTOR_CONVERTER.className()
+        )));
+        assertTrue(plugins.connectorClientConfigPolicies().stream().noneMatch(pluginDesc -> pluginDesc.className().equals(
+                TestPlugin.BAD_PACKAGING_NO_DEFAULT_CONSTRUCTOR_OVERRIDE_POLICY.className()
+        )));
+    }
+
+    @Test
     public void shouldNotThrowIfVersionMethodThrows() {
         assertNotNull(plugins.newConnector(
                 TestPlugin.BAD_PACKAGING_VERSION_METHOD_THROWS_CONNECTOR.className()
@@ -464,7 +477,7 @@ public class PluginsTest {
     }
 
     private void assertClassLoaderReadsVersionFromResource(
-            TestPlugin parentResource, TestPlugin childResource, String className, String... expectedVersions) throws MalformedURLException {
+            TestPlugin parentResource, TestPlugin childResource, String className, String... expectedVersions) {
         URL[] systemPath = TestPlugins.pluginPath(parentResource)
                 .stream()
                 .map(Path::toFile)
@@ -485,7 +498,12 @@ public class PluginsTest {
                 WorkerConfig.PLUGIN_PATH_CONFIG,
                 TestPlugins.pluginPathJoined(childResource)
         );
-        plugins = new Plugins(pluginProps, parent);
+        plugins = new Plugins(pluginProps, parent, new ClassLoaderFactory());
+
+        assertTrue("Should find plugin in plugin classloader",
+                plugins.converters().stream().anyMatch(desc -> desc.loader() instanceof PluginClassLoader));
+        assertTrue("Should find plugin in parent classloader",
+                plugins.converters().stream().anyMatch(desc -> parent.equals(desc.loader())));
 
         Converter converter = plugins.newPlugin(
                 className,

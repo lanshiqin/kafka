@@ -73,7 +73,7 @@ class ZkConfigMigrationClientTest extends ZkMigrationTestHarness {
       val value = message.value
 
       assertTrue(props.containsKey(name))
-      // If the config is senstive, compare it to the decoded value.
+      // If the config is sensitive, compare it to the decoded value.
       if (name == KafkaConfig.SslKeystorePasswordProp) {
         assertEquals(SECRET, value)
       } else {
@@ -311,9 +311,10 @@ class ZkConfigMigrationClientTest extends ZkMigrationTestHarness {
     val image = delta.apply(MetadataProvenance.EMPTY)
 
     // load snapshot to Zookeeper.
-    val kraftMigrationZkWriter = new KRaftMigrationZkWriter(migrationClient,
-      (_, operation) => { migrationState = operation.apply(migrationState) })
-    kraftMigrationZkWriter.handleLoadSnapshot(image)
+    val kraftMigrationZkWriter = new KRaftMigrationZkWriter(migrationClient)
+    kraftMigrationZkWriter.handleSnapshot(image, (_, _, operation) => {
+      migrationState = operation.apply(migrationState)
+    })
 
     val user1Props = zkClient.getEntityConfigs(ConfigType.User, "user1")
     assertEquals(0, user1Props.size())
